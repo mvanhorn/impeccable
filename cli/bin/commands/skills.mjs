@@ -1369,13 +1369,17 @@ function windowsHookCommand(quotedPath) {
   return `if exist ${quotedPath} (node ${quotedPath} & exit /b)`;
 }
 
-function guardHookCommand(quotedPath, provider) {
+function quotePosixHookPath(hookPath) {
+  return `'${hookPath.replace(/'/g, `'"'"'`)}'`;
+}
+
+function guardHookCommand(posixPath, windowsPath, provider) {
   // `.agents` (Codex) keeps the POSIX form unconditionally: its Windows
   // consumers read the commandWindows sibling instead.
   if (provider !== '.agents' && process.platform === 'win32') {
-    return `node -e "${WIN32_HOOK_GUARD_SCRIPT}" ${quotedPath}`;
+    return `node -e "${WIN32_HOOK_GUARD_SCRIPT}" ${windowsPath}`;
   }
-  return `[ ! -f ${quotedPath} ] || node ${quotedPath}`;
+  return `[ ! -f ${posixPath} ] || node ${posixPath}`;
 }
 
 // Transform bundled hook commands for the actual install target:
@@ -1398,13 +1402,17 @@ function rewriteHookCommandsForSkillRoot(value, provider, { skillRoot, absolute 
   // Project-scope installs derive the provider's own project-relative path
   // rather than trusting the bundle token, which for Codex points at
   // `.codex/skills/...` while the CLI installs the skill at `.agents/skills/`.
-  const quotedPath = absolute
-    ? JSON.stringify(hookScript)
-    : JSON.stringify(hookScriptRelPathForProvider(provider));
+  const commandPath = absolute ? hookScript : hookScriptRelPathForProvider(provider);
+  // Claude's portable project token must expand in POSIX shells. Every other
+  // path is literal data and uses strong single-quote escaping.
+  const posixPath = !absolute && provider === '.claude'
+    ? JSON.stringify(commandPath)
+    : quotePosixHookPath(commandPath);
+  const windowsPath = JSON.stringify(commandPath);
 
   if (typeof value === 'string') {
     if (!valueHasImpeccableHookMarker(value)) return value;
-    return guardHookCommand(quotedPath, provider);
+    return guardHookCommand(posixPath, windowsPath, provider);
   }
   if (Array.isArray(value)) {
     return value.map(item => rewriteHookCommandsForSkillRoot(item, provider, { skillRoot, absolute }));
@@ -1415,7 +1423,7 @@ function rewriteHookCommandsForSkillRoot(value, provider, { skillRoot, absolute 
       next[key] = rewriteHookCommandsForSkillRoot(child, provider, { skillRoot, absolute });
     }
     if (provider === '.agents' && typeof value.command === 'string' && valueHasImpeccableHookMarker(value.command)) {
-      next.commandWindows = windowsHookCommand(quotedPath);
+      next.commandWindows = windowsHookCommand(windowsPath);
     }
     return next;
   }

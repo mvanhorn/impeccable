@@ -1112,6 +1112,9 @@ function formatFindingIgnoreCommand(finding) {
 function quoteCommandArg(value) {
   const text = String(value || '').trim();
   if (/^[A-Za-z0-9._:-]+$/.test(text)) return text;
+  if (process.platform !== 'win32') {
+    return `'${text.replace(/'/g, `'"'"'`)}'`;
+  }
   return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 

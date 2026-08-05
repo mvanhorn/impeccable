@@ -1619,7 +1619,86 @@ describe('copyProviderHooks: hook command path resolution (#399)', () => {
     rmSync(tmp, { recursive: true, force: true });
     rmSync(skillHome, { recursive: true, force: true });
   });
+
+  test('Codex guards quote project and absolute hook paths without POSIX execution', () => {
+    if (process.platform === 'win32') return;
+
+    const parent = mkdtempSync(join(tmpdir(), 'imp-hook-shell-safety-'));
+    const projectRoot = join(parent, "project $(touch hook-injection-sentinel) 'quote'");
+    const skillRoot = join(parent, "global $(touch hook-injection-sentinel) 'quote'");
+    mkdirSync(projectRoot, { recursive: true });
+    mkdirSync(skillRoot, { recursive: true });
+    const bundleDir = createFakeUniversalBundle(parent, ['.agents']);
+
+    const projectScript = join(projectRoot, '.agents', 'skills', 'impeccable', 'scripts', 'hook.mjs');
+    mkdirSync(join(projectScript, '..'), { recursive: true });
+    writeFileSync(projectScript, 'process.exit(7);\n');
+    copyProviderHooks(bundleDir, projectRoot, ['.agents'], { skillRoot: projectRoot });
+
+    const projectEntry = JSON.parse(readFileSync(join(projectRoot, '.codex', 'hooks.json'), 'utf8'))
+      .hooks.PostToolUse[0].hooks[0];
+    expect(projectEntry.command).toContain("'.agents/skills/impeccable/scripts/hook.mjs'");
+    expect(shellStatus(projectEntry.command, projectRoot)).toBe(7);
+    expect(projectEntry.commandWindows).toBe('if exist ".agents/skills/impeccable/scripts/hook.mjs" (node ".agents/skills/impeccable/scripts/hook.mjs" & exit /b)');
+
+    const absoluteScript = join(skillRoot, '.agents', 'skills', 'impeccable', 'scripts', 'hook.mjs');
+    mkdirSync(join(absoluteScript, '..'), { recursive: true });
+    writeFileSync(absoluteScript, 'process.exit(7);\n');
+    copyProviderHooks(bundleDir, projectRoot, ['.agents'], { force: true, skillRoot });
+
+    const absoluteEntry = JSON.parse(readFileSync(join(projectRoot, '.codex', 'hooks.json'), 'utf8'))
+      .hooks.PostToolUse[0].hooks[0];
+    expect(absoluteEntry.command).toContain("'\"'\"'");
+    expect(shellStatus(absoluteEntry.command, projectRoot)).toBe(7);
+    expect(absoluteEntry.commandWindows).toContain(`if exist ${JSON.stringify(absoluteScript)} (node ${JSON.stringify(absoluteScript)} & exit /b)`);
+    expect(existsSync(join(projectRoot, 'hook-injection-sentinel'))).toBe(false);
+
+    rmSync(absoluteScript);
+    expect(shellStatus(absoluteEntry.command, projectRoot)).toBe(0);
+    rmSync(parent, { recursive: true, force: true });
+  });
+
+  test('Windows hook wrappers keep double-quoted paths and forward child exits', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'imp-hook-windows-safety-'));
+    const projectRoot = join(parent, 'project');
+    const skillRoot = join(parent, "global & 'quote'");
+    mkdirSync(projectRoot, { recursive: true });
+    mkdirSync(skillRoot, { recursive: true });
+    const bundleDir = createFakeUniversalBundle(parent, ['.claude', '.cursor']);
+    const originalPlatform = process.platform;
+
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      copyProviderHooks(bundleDir, projectRoot, ['.claude', '.cursor'], { skillRoot });
+
+      const claudeCommand = claudeHookCommands(join(projectRoot, '.claude', 'settings.local.json'))[0];
+      const cursorCommand = JSON.parse(readFileSync(join(projectRoot, '.cursor', 'hooks.json'), 'utf8'))
+        .hooks.preToolUse[0].command;
+      for (const [command, script] of [
+        [claudeCommand, join(skillRoot, '.claude', 'skills', 'impeccable', 'scripts', 'hook.mjs')],
+        [cursorCommand, join(skillRoot, '.cursor', 'skills', 'impeccable', 'scripts', 'hook-before-edit.mjs')],
+      ]) {
+        expect(command).toStartWith('node -e "const p=process.argv[1]');
+        expect(command).toContain("spawnSync(process.execPath,[p],{stdio:'inherit'})");
+        expect(command).toContain('process.exit(r.status===null?1:r.status)');
+        expect(command).toEndWith(` ${JSON.stringify(script)}`);
+        expect(command).not.toContain('[ ! -f');
+      }
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
 });
+
+function shellStatus(command, cwd) {
+  try {
+    execSync(command, { cwd, stdio: 'ignore', shell: '/bin/sh' });
+    return 0;
+  } catch (error) {
+    return error.status;
+  }
+}
 
 // ─── Update scope resolution (issue #399, part 2) ────────────────────────────
 

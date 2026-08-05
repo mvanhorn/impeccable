@@ -284,3 +284,35 @@ for (const name of listFixtures()) {
     });
   });
 }
+
+describe('generated-file shell safety', () => {
+  it('classifies metacharacter-bearing paths without executing their contents', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'impeccable-generated-safety-'));
+    const sentinel = join(tmp, 'shell-injection-sentinel');
+    const ignoredNames = [
+      '$(touch shell-injection-sentinel)',
+      '`touch shell-injection-sentinel`',
+      "spaces and 'quotes'.html",
+    ];
+    const sourceNames = ignoredNames.map((name) => `source-${name}`);
+
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: tmp });
+      mkdirSync(join(tmp, 'ignored'));
+      writeFileSync(join(tmp, '.gitignore'), 'ignored/\n');
+
+      for (const name of ignoredNames) {
+        writeFileSync(join(tmp, 'ignored', name), '<main>ignored</main>\n');
+        assert.equal(isGeneratedFile(join('ignored', name), { cwd: tmp }), true);
+      }
+      for (const name of sourceNames) {
+        writeFileSync(join(tmp, name), '<main>source</main>\n');
+        assert.equal(isGeneratedFile(name, { cwd: tmp }), false);
+      }
+
+      assert.equal(existsSync(sentinel), false, 'path contents must never execute');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

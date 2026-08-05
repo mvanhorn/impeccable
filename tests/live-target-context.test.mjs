@@ -2,9 +2,11 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+
+import { runScript } from '../skill/scripts/live.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
@@ -312,6 +314,39 @@ describe('live single-repo context setup guard', () => {
     assert.equal(payload.productPath, null);
     assert.equal(payload.designPath, null);
     assertNoSingleRepoLiveBootSideEffects(tmp);
+  });
+});
+
+describe('live script runner shell safety', () => {
+  it('passes arguments unchanged and preserves non-zero stdout fallback', () => {
+    const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'impeccable-live-runner-')));
+    const child = write(tmp, 'argv-child.mjs', `
+process.stdout.write(JSON.stringify(process.argv.slice(2)));
+if (process.argv.includes('--fail')) process.exit(7);
+`);
+    const scriptName = relative(dirname(LIVE_SCRIPT), child);
+    const args = [
+      'plain',
+      'white space',
+      '"double quotes"',
+      "single ' quotes",
+      '$(touch shell-injection-sentinel)',
+      '`touch shell-injection-sentinel`',
+      '${HOME}',
+      '',
+    ];
+
+    try {
+      assert.deepEqual(JSON.parse(runScript(scriptName, args, { cwd: tmp })), args);
+      assert.equal(existsSync(join(tmp, 'shell-injection-sentinel')), false);
+      assert.deepEqual(
+        JSON.parse(runScript(scriptName, [...args, '--fail'], { cwd: tmp })),
+        [...args, '--fail'],
+      );
+      assert.equal(existsSync(join(tmp, 'shell-injection-sentinel')), false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 

@@ -1142,6 +1142,42 @@ describe('renderTemplate()', () => {
     assert.match(text, /\/impeccable hooks ignore-value bounce-easing bounce-ball --shared/);
   });
 
+  it('quotes metacharacter-bearing ignore values as literal POSIX arguments', () => {
+    if (process.platform === 'win32') return;
+
+    const cwd = mkTmp();
+    const value = "Font $(touch hook-sentinel) `touch hook-sentinel` ${HOME} C:\\Fonts Choice's";
+    try {
+      const text = renderTemplate(
+        [{ ...finding('design-system-font', 1, { name: 'Off-system font' }), ignoreValue: value }],
+        '/x/fonts.css', DEFAULT_CONFIG, { cwd: '/x' }
+      );
+      const line = text.split('\n').find((candidate) =>
+        candidate.startsWith('- L') && candidate.includes('/impeccable hooks ignore-value'));
+      const start = line.indexOf('/impeccable');
+      const end = line.lastIndexOf('`.');
+      const command = line.slice(start, end);
+      const args = command.slice('/impeccable '.length);
+      const output = execFileSync('/bin/sh', ['-c', `set -- ${args}; printf '%s\\n' "$@"`], {
+        cwd,
+        encoding: 'utf-8',
+      });
+
+      assert.deepEqual(output.trimEnd().split('\n'), [
+        'hooks',
+        'ignore-value',
+        'design-system-font',
+        value,
+        '--shared',
+        '--reason',
+        `User confirmed ${value} is intentional`,
+      ]);
+      assert.equal(fs.existsSync(path.join(cwd, 'hook-sentinel')), false);
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('drops the L<line> prefix when line is 0', () => {
     const text = renderTemplate(
       [finding('side-tab', 0, { name: 'X' })],

@@ -3,7 +3,6 @@
 //! pass. Always exits 0; stdout is one JSON document or nothing.
 
 use impeccable_core::findings::Finding;
-use impeccable_core::js;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
@@ -201,17 +200,11 @@ pub fn run_hook(rt: &Runtime, stdin: &str) -> RunResult {
             last_skip = "generated";
             continue;
         }
-        let ext = js::to_lower_case(&jsp::extname(file_path));
-        let configured = match_configured_extension(file_path, &config.extensions);
         audit.insert(
             "ext".into(),
-            Value::String(
-                configured
-                    .map(|c| c.ext.clone())
-                    .unwrap_or_else(|| ext.clone()),
-            ),
+            Value::String(extension_label(file_path, &config.extensions)),
         );
-        if !ALLOWED_EXTS.contains(&ext.as_str()) && configured.is_none() {
+        if !is_hook_scan_path(file_path, &config.extensions) {
             last_skip = "extension";
             continue;
         }
@@ -254,10 +247,7 @@ pub fn run_hook(rt: &Runtime, stdin: &str) -> RunResult {
                 }
             }
         }
-        let use_html_engine = match configured {
-            Some(c) => c.engine == "html",
-            None => ext == ".html" || ext == ".htm",
-        };
+        let use_html_engine = uses_html_engine(file_path, &config.extensions);
         if primary_files.contains(file_path) {
             if harness == "claude" {
                 stop_baseline::capture(rt, &event, &mut cache, &session_id, file_path, use_html_engine);
@@ -726,9 +716,7 @@ pub fn run_stop_hook(rt: &Runtime, stdin: &str) -> RunResult {
         {
             continue;
         }
-        let ext = js::to_lower_case(&jsp::extname(file_path));
-        let configured = match_configured_extension(file_path, &config.extensions);
-        if !ALLOWED_EXTS.contains(&ext.as_str()) && configured.is_none() {
+        if !is_hook_scan_path(file_path, &config.extensions) {
             continue;
         }
         let rel = relativize(rt, file_path, &project_cwd);
@@ -748,10 +736,7 @@ pub fn run_stop_hook(rt: &Runtime, stdin: &str) -> RunResult {
         if crate::hook_lib::has_live_preview_markers(&content) {
             continue;
         }
-        let use_html_engine = match configured {
-            Some(c) => c.engine == "html",
-            None => ext == ".html" || ext == ".htm",
-        };
+        let use_html_engine = uses_html_engine(file_path, &config.extensions);
         let scan = scans.entry(file_path.clone()).or_insert_with(|| {
             design_system_options_for_file(rt, &config, &project_cwd, file_path)
         });

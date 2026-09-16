@@ -2219,19 +2219,12 @@ pub fn co_located_stylesheets(file_path: &str) -> Vec<String> {
         jsp::basename_ext(file_path, &jsp::extname(file_path))
     };
     let mut candidates: Vec<String> = Vec::new();
-    for suffix in [
-        ".css",
-        ".module.css",
-        ".scss",
-        ".module.scss",
-        ".sass",
-        ".module.sass",
-        ".less",
-        ".module.less",
-    ] {
-        let p = jsp::join(&[&dir, &format!("{base}{suffix}")]);
-        if !candidates.contains(&p) {
-            candidates.push(p);
+    for ext in STYLE_EXTS {
+        for extra in ["", ".module"] {
+            let p = jsp::join(&[&dir, &format!("{base}{extra}{ext}")]);
+            if !candidates.contains(&p) {
+                candidates.push(p);
+            }
         }
     }
     for name in CO_SCAN_STYLE_NAMES {
@@ -2304,6 +2297,9 @@ pub fn expand_scan_targets(rt: &Runtime, primaries: &[String], project_cwd: &str
             continue;
         }
         let ext = js::to_lower_case(&jsp::extname(p));
+        if STYLE_EXTS.contains(&ext.as_str()) {
+            continue;
+        }
         if !matches!(ext.as_str(), ".jsx" | ".tsx") && !is_component(p) {
             continue;
         }

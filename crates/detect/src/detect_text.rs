@@ -629,9 +629,10 @@ fn blank_astro_frontmatter_comments(text: &str) -> String {
     out
 }
 
-/// JS `blankCommentsForMatchers`.
-fn blank_comments_for_matchers(text: &str, file_path: &str, ext: &str) -> String {
-    if crate::engine_route::match_html_engine_extension(file_path).is_some() {
+/// JS `blankCommentsForMatchers`. `markup` covers configured suffixes
+/// (`detect_markup_text`) that `match_html_engine_extension` does not know.
+fn blank_comments_for_matchers(text: &str, file_path: &str, ext: &str, markup: bool) -> String {
+    if markup || crate::engine_route::match_html_engine_extension(file_path).is_some() {
         let with_frontmatter = if ext == ".astro" {
             blank_astro_frontmatter_comments(text)
         } else {
@@ -1420,7 +1421,7 @@ fn detect_source(
     let comment_stripped = if JS_SOURCE_EXTS.contains(&ext.as_str()) {
         strip_js_comments(content, ext == ".js" || ext == ".jsx" || ext == ".tsx")
     } else {
-        blank_comments_for_matchers(content, file_path, &ext)
+        blank_comments_for_matchers(content, file_path, &ext, markup)
     };
     let source = strip_css_in_js_comments(&comment_stripped, &ext);
     let lines: Vec<&str> = source.split('\n').collect();
@@ -1623,5 +1624,30 @@ mod tests {
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].snippet, ".card — inset box-shadow 4px stripe (left)");
         assert_eq!(f[0].line, 1.0);
+    }
+
+    #[test]
+    fn markup_text_blanks_html_comments_for_configured_suffixes() {
+        let commented = "<!--\n.card { border-left: 4px solid #6366f1; }\n-->\n<p>Hello</p>";
+        let live = "<p>Hello</p>\n<style>.card { border-left: 4px solid #6366f1; }</style>";
+        let opts = TextOptions {
+            inline_ignores: true,
+            ..Default::default()
+        };
+        let vue = detect_text(commented, "/x/Card.vue", &opts);
+        assert!(
+            !vue.iter().any(|f| f.antipattern == "side-tab"),
+            "built-in markup blanks HTML comments: {vue:?}"
+        );
+        let erb = detect_markup_text(commented, "/x/page.html.erb", &opts);
+        assert!(
+            !erb.iter().any(|f| f.antipattern == "side-tab"),
+            "configured markup should blank HTML comments like .vue: {erb:?}"
+        );
+        let live_erb = detect_markup_text(live, "/x/page.html.erb", &opts);
+        assert!(
+            live_erb.iter().any(|f| f.antipattern == "side-tab"),
+            "live CSS outside comments still flags: {live_erb:?}"
+        );
     }
 }

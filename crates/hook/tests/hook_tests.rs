@@ -317,7 +317,7 @@ fn blade_components_coscan_sibling_stylesheets() {
     t.write("package.json", "{}");
     let blade = t.write("views/Card.blade.php", "<p>Card</p>");
     let css = t.write("views/Card.css", SIDE_TAB_CSS);
-    let targets = normalize_scan_targets(&rt(&cwd), &[blade], &cwd);
+    let targets = expand_scan_targets(&rt(&cwd), &[blade], &cwd);
     assert!(targets.contains(&css), "{targets:?}");
 }
 

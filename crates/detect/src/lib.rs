@@ -25,8 +25,9 @@ pub mod skills;
 pub mod util;
 
 pub use engine_route::{
-    extension_label, match_configured_extension, match_html_engine_extension, merge_extensions,
-    normalize_extension_entries, uses_html_engine, ExtensionEntry, HTML_ENGINE_EXTENSIONS,
+    extension_label, is_markup_template, is_scannable, match_configured_extension,
+    match_html_engine_extension, merge_extensions, normalize_extension_entries, uses_html_engine,
+    ExtensionEntry, HTML_ENGINE_EXTENSIONS,
 };
 
 use impeccable_common::Io;

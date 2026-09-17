@@ -63,13 +63,15 @@ pub fn ext_from_file_path(file_path: &str) -> String {
     }
 }
 
-/// JS `shouldRunPageAnalyzers`.
+/// JS `shouldRunPageAnalyzers`. Consults the HTML-engine suffix map (including
+/// multi-part built-ins such as `.blade.php`) rather than last-segment
+/// `extname`. Configured suffixes reach this path through [`detect_markup_text`].
 pub fn should_run_page_analyzers(content: &str, file_path: &str) -> bool {
     if !is_full_page(content) {
         return false;
     }
     let ext = ext_from_file_path(file_path);
-    ext.is_empty() || crate::engine_route::match_html_engine_extension(file_path).is_some()
+    ext.is_empty() || crate::engine_route::uses_html_engine(file_path, &[])
 }
 
 fn is_ws(c: char) -> bool {
@@ -474,10 +476,17 @@ fn blank_html_and_css_comments_outside_scripts(text: &str) -> String {
 }
 
 fn is_js_ws(c: char) -> bool {
-    matches!(c,
-        '\t' | '\n' | '\x0B' | '\x0C' | '\r' | ' ' | '\u{A0}' | '\u{1680}'
-        | '\u{2000}'..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}'
-        | '\u{205F}' | '\u{3000}' | '\u{FEFF}')
+    matches!(
+        c,
+        '\t' | '\n' | '\x0B' | '\x0C' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200A}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202F}'
+                | '\u{205F}'
+                | '\u{3000}'
+                | '\u{FEFF}'
+    )
 }
 
 /// JS `blankCssLineComments`: a small state machine that blanks `//` line
@@ -1648,6 +1657,34 @@ mod tests {
         assert!(
             live_erb.iter().any(|f| f.antipattern == "side-tab"),
             "live CSS outside comments still flags: {live_erb:?}"
+        );
+    }
+
+    #[test]
+    fn page_analyzers_use_suffix_map_not_last_segment() {
+        let page = "<!doctype html><html><body><p>Unlock your potential. Seamlessly leverage cutting-edge solutions. Empower your journey with game-changing innovation. Revolutionize your workflow with next-generation technology.</p></body></html>";
+        assert!(should_run_page_analyzers(page, "page.blade.php"));
+        assert!(should_run_page_analyzers(page, "page.html"));
+        assert!(!should_run_page_analyzers(page, "page.php"));
+        assert!(
+            !should_run_page_analyzers(page, "page.html.erb"),
+            "configured suffixes need detect_markup_text, not last-segment .erb"
+        );
+        let opts = TextOptions {
+            inline_ignores: true,
+            ..Default::default()
+        };
+        assert!(
+            detect_markup_text(page, "page.html.erb", &opts)
+                .iter()
+                .any(|f| f.antipattern == "marketing-buzzword"),
+            "markup pipeline must run full-page copy analyzers"
+        );
+        assert!(
+            !detect_text(page, "page.html.erb", &opts)
+                .iter()
+                .any(|f| f.antipattern == "marketing-buzzword"),
+            "bare detect_text must not guess configured suffixes"
         );
     }
 }

@@ -151,15 +151,19 @@ pub fn match_html_engine_extension(file_path: &str) -> Option<&'static str> {
     }
     let mut best: Option<&'static str> = None;
     for ext in HTML_ENGINE_EXTENSIONS {
-        if suffix_matches(&name, ext)
-            && best
-                .map(|b| utf16_len(ext) > utf16_len(b))
-                .unwrap_or(true)
+        if suffix_matches(&name, ext) && best.map(|b| utf16_len(ext) > utf16_len(b)).unwrap_or(true)
         {
             best = Some(*ext);
         }
     }
     best
+}
+
+/// Markup-bearing non-`.html` sources: built-in SFCs/templates and configured
+/// `engine: "html"` suffixes. These run the full text pipeline plus DOM
+/// checks; plain HTML stays DOM-only.
+pub fn is_markup_template(file_path: &str, configured: &[ExtensionEntry]) -> bool {
+    uses_html_engine(file_path, configured) && !is_plain_html(file_path)
 }
 
 /// Whether `file_path` should run the DOM/HTML engine.
@@ -225,6 +229,10 @@ mod tests {
         assert!(!uses_html_engine("/x/page.tsx", &[]));
         assert!(!uses_html_engine("/x/page.php", &[]));
         assert!(!uses_html_engine("/x/page.html.erb", &[]));
+        assert!(is_markup_template("/x/Card.vue", &[]));
+        assert!(!is_markup_template("/x/page.html", &[]));
+        let erb = normalize_extension_entries(&[json!({"ext": ".html.erb", "engine": "html"})]);
+        assert!(is_markup_template("/x/page.html.erb", &erb));
     }
 
     #[test]

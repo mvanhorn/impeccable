@@ -182,8 +182,14 @@ Recorded and reviewed against the release binary:
   `templates/page.html.erb`. `templates/vendor/bundle/page.html.erb` is skipped
   (`vendor` is now in `SKIP_DIRS`) and `templates/controller.php` is absent
   (a configured `engine: text` suffix no longer widens the walk).
-- `hook-template-baseline-{vue,blade-php}`: hook scope and a copy edit against
-  pre-existing debt, confirming Stop baselines survive for template files.
+- `hook-template-baseline-{vue,blade-php,html-erb}`: hook scope and a copy edit
+  against pre-existing debt, confirming Stop baselines survive for built-in
+  templates and configured `.html.erb`. The Stop path runs the markup text
+  pipeline (comment blanking and full-page copy analyzers) so configured
+  suffixes match the hybrid scan.
+- Hook session cache `version` is `2`. Version `1` entries (HTML findings keyed
+  as `rule:0:snippet`) are discarded so a session spanning the engine flip does
+  not re-emit acknowledged findings as fresh.
 - `detect-help`: two intended contract additions, `detector.extensions` in the
   project-config list and the "Markup files" detection-mode line naming the
   built-in suffixes plus configured html-engine extensions.

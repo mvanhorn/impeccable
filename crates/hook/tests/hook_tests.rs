@@ -322,6 +322,101 @@ fn blade_components_coscan_sibling_stylesheets() {
 }
 
 #[test]
+fn configured_erb_components_coscan_sibling_stylesheets() {
+    let t = Tmp::new();
+    let cwd = t.path();
+    t.write("package.json", "{}");
+    let erb = t.write("views/Card.html.erb", "<p>Card</p>");
+    let css = t.write("views/Card.css", SIDE_TAB_CSS);
+    let exts = normalize_extension_entries(&[json!({"ext": ".html.erb", "engine": "html"})]);
+    let targets = expand_scan_targets_with(&rt(&cwd), &[erb], &cwd, &exts);
+    assert!(targets.contains(&css), "{targets:?}");
+}
+
+#[test]
+fn read_cache_drops_pre_line_key_sessions() {
+    let t = Tmp::new();
+    let cwd = t.path();
+    std::fs::create_dir_all(format!("{cwd}/.impeccable")).unwrap();
+    std::fs::write(
+        format!("{cwd}/.impeccable/hook.cache.json"),
+        r#"{"version":1,"sessions":{"s":{"files":{"/x/a.vue":{"findings":["low-contrast:0:snippet"]}}}}}"#,
+    )
+    .unwrap();
+    let cache = read_cache(&cwd);
+    assert_eq!(cache["version"], json!(2));
+    assert!(
+        cache["sessions"].as_object().unwrap().is_empty(),
+        "stale rule:0:snippet keys must not survive the engine flip"
+    );
+}
+
+#[test]
+fn template_immediate_finding_keeps_line_marker() {
+    let t = Tmp::new();
+    let cwd = t.path();
+    t.write("package.json", "{}");
+    let file = t.write(
+        "src/Card.vue",
+        "<a style=\"color:#ccc;background:#fff\">low contrast</a>\n",
+    );
+    let html = impeccable_html::StaticHtmlEngine::default();
+    let r = Runtime::new(
+        cwd.clone(),
+        HashMap::new(),
+        "/impeccable".into(),
+        "/opt/bin/impeccable",
+        &html,
+    );
+    let out = hook::run_hook(&r, &edit_event(&cwd, &file, "s1")).stdout;
+    assert!(
+        out.contains("L1 [low-contrast]"),
+        "per-edit reminder must keep L<n>: {out}"
+    );
+}
+
+#[test]
+fn configured_erb_stop_baseline_covers_full_page_copy() {
+    let t = Tmp::new();
+    let cwd = t.path();
+    t.write("package.json", "{}");
+    t.write(
+        ".impeccable/config.json",
+        r#"{"detector":{"extensions":[{"ext":".html.erb","engine":"html"}]}}"#,
+    );
+    let buzz = "Unlock your potential. Seamlessly leverage cutting-edge solutions. Empower your journey with game-changing innovation. Revolutionize your workflow with next-generation technology.";
+    let before = format!(
+        "<!doctype html><html><body><p>{buzz}</p><p>Before</p></body></html>"
+    );
+    let after = before.replace("Before", "After");
+    let file = t.write("views/page.html.erb", &after);
+    let html = impeccable_html::StaticHtmlEngine::default();
+    let r = Runtime::new(
+        cwd.clone(),
+        HashMap::new(),
+        "/impeccable".into(),
+        "/opt/bin/impeccable",
+        &html,
+    );
+    hook::run_hook(
+        &r,
+        &edit_with_original(&cwd, &file, "s1", &before, "Before", "After"),
+    );
+    let stop = hook::run_stop_hook(&r, &stop_event(&cwd, "s1"));
+    assert!(
+        !stop.stdout.contains("[attribution unknown]"),
+        "configured markup must keep Stop baseline: {}",
+        stop.stdout
+    );
+    assert_eq!(stop.audit["unknownFindings"], json!(0), "{:?}", stop.audit);
+    assert!(
+        stop.audit["preExistingFindings"].as_u64().unwrap_or(0) >= 1,
+        "full-page copy must be in the markup baseline: {:?}",
+        stop.audit
+    );
+}
+
+#[test]
 fn proposed_template_uses_project_stylesheets_without_writing_source() {
     let t = Tmp::new();
     let cwd = t.path();

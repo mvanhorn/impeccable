@@ -16,8 +16,10 @@ use impeccable_detect::config::{
     normalize_ignore_rule, normalize_ignore_value, normalize_ignore_value_entries, DetectionConfig,
     IgnoreValueEntry,
 };
-use impeccable_detect::design_system::{load_design_system_for_cwd, resolve_design_md_path, DesignSystem};
-use impeccable_detect::detect_text::{detect_text, TextOptions};
+use impeccable_detect::design_system::{
+    load_design_system_for_cwd, resolve_design_md_path, DesignSystem,
+};
+use impeccable_detect::detect_text::{detect_markup_text, detect_text, TextOptions};
 use impeccable_detect::engines::{HtmlEngine, ScanOptions};
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -37,7 +39,7 @@ pub const ACK_EXTS: &[&str] = &[
 ];
 
 pub use impeccable_detect::engine_route::{
-    extension_label, is_component, is_plain_html, match_configured_extension,
+    extension_label, is_component, is_markup_template, is_plain_html, match_configured_extension,
     match_html_engine_extension, merge_extensions, normalize_extension_entries, uses_html_engine,
     ExtensionEntry, HTML_ENGINE_EXTENSIONS,
 };
@@ -130,6 +132,10 @@ pub const HOOK_LOCAL_IGNORE_PATTERNS: &[&str] = &[
 ];
 const HOOK_IGNORE_MARKER_OPEN: &str = "# impeccable-hook-ignore-start";
 const HOOK_IGNORE_MARKER_CLOSE: &str = "# impeccable-hook-ignore-end";
+/// Bumped when HTML-engine finding keys gained source lines (`rule:line`
+/// instead of `rule:0:snippet`). A session spanning that flip must not treat
+/// the old keys as acknowledgements of the new ones.
+const CACHE_VERSION: u64 = 2;
 const CACHE_MAX_SESSIONS: usize = 8;
 pub const EDIT_COUNT_THRESHOLD: u64 = 6;
 pub const MAX_SCAN_TARGETS: usize = 6;
@@ -189,7 +195,13 @@ fn hook_state_dir(cwd: &str) -> String {
         let resolved = jsp::resolve(&proc_cwd, &[cwd]);
         let slug: String = resolved
             .chars()
-            .map(|c| if matches!(c, ':' | '\\' | '/' | '.') { '-' } else { c })
+            .map(|c| {
+                if matches!(c, ':' | '\\' | '/' | '.') {
+                    '-'
+                } else {
+                    c
+                }
+            })
             .collect();
         let digest = {
             use sha2::Digest;
@@ -197,7 +209,10 @@ fn hook_state_dir(cwd: &str) -> String {
             h.update(resolved.as_bytes());
             format!("{:x}", h.finalize())[..8].to_string()
         };
-        return jsp::join(&[&jsp::resolve(&proc_cwd, &[&root]), &format!("{}-{}", slug, digest)]);
+        return jsp::join(&[
+            &jsp::resolve(&proc_cwd, &[&root]),
+            &format!("{}-{}", slug, digest),
+        ]);
     }
     jsp::join(&[cwd, ".impeccable"])
 }
@@ -572,9 +587,12 @@ pub type Cache = Map<String, Value>;
 pub fn read_cache(cwd: &str) -> Cache {
     let raw = safe_read_json(&get_cache_path(cwd));
     let mut cache = Map::new();
-    cache.insert("version".into(), Value::from(1));
+    cache.insert("version".into(), Value::from(CACHE_VERSION));
     let sessions = match raw {
-        Some(Value::Object(o)) if o.get("version").and_then(Value::as_f64) == Some(1.0) => {
+        Some(Value::Object(o))
+            if o.get("version").and_then(Value::as_u64) == Some(CACHE_VERSION)
+                || o.get("version").and_then(Value::as_f64) == Some(CACHE_VERSION as f64) =>
+        {
             match o.get("sessions") {
                 Some(Value::Object(s)) => s.clone(),
                 _ => Map::new(),
@@ -1597,18 +1615,44 @@ pub fn design_system_options_for_file(
 
 /// The detector the hook drives: the regex engine from `impeccable-detect`
 /// and the static HTML engine through the `HtmlEngine` seam.
+fn text_options(scan: &HookScanOptions) -> TextOptions<'_> {
+    TextOptions {
+        profile: None,
+        design_system: scan.design_system.as_deref(),
+        inline_ignores: true,
+        rule_pack: None,
+    }
+}
+
 pub fn detector_detect_text(
     content: &str,
     file_path: &str,
     scan: &HookScanOptions,
 ) -> Vec<Finding> {
-    let opts = TextOptions {
-        profile: None,
-        design_system: scan.design_system.as_deref(),
-        inline_ignores: true,
-        rule_pack: None,
-    };
-    detect_text(content, file_path, &opts)
+    detect_text(content, file_path, &text_options(scan))
+}
+
+/// Full text pipeline for markup-bearing templates, including configured
+/// suffixes that `detect_text` would treat as last-segment `.erb` / `.php`.
+pub fn detector_detect_markup(
+    content: &str,
+    file_path: &str,
+    scan: &HookScanOptions,
+) -> Vec<Finding> {
+    detect_markup_text(content, file_path, &text_options(scan))
+}
+
+pub fn detector_detect_source(
+    content: &str,
+    file_path: &str,
+    scan: &HookScanOptions,
+    markup: bool,
+) -> Vec<Finding> {
+    if markup {
+        detector_detect_markup(content, file_path, scan)
+    } else {
+        detector_detect_text(content, file_path, scan)
+    }
 }
 
 pub fn detector_detect_html(
@@ -1990,7 +2034,12 @@ fn normalize_grok_event(
         .get("cwd")
         .filter(|v| truthy_value(Some(v)))
         .cloned()
-        .or_else(|| event.get("workspaceRoot").filter(|v| truthy_value(Some(v))).cloned())
+        .or_else(|| {
+            event
+                .get("workspaceRoot")
+                .filter(|v| truthy_value(Some(v)))
+                .cloned()
+        })
         .or_else(|| {
             rt.env("CURSOR_PROJECT_DIR")
                 .filter(|v| !v.is_empty())
@@ -2024,7 +2073,10 @@ fn normalize_grok_event(
     out.insert("tool_name".into(), tool_name);
     out.insert("tool_input".into(), Value::Object(tool_input));
     if event.contains_key("stopHookActive") && !event.contains_key("stop_hook_active") {
-        out.insert("stop_hook_active".into(), event.get("stopHookActive").cloned().unwrap_or(Value::Null));
+        out.insert(
+            "stop_hook_active".into(),
+            event.get("stopHookActive").cloned().unwrap_or(Value::Null),
+        );
     }
     out
 }
@@ -2211,9 +2263,20 @@ pub fn parse_static_style_imports(
 
 /// JS: coLocatedStylesheets(filePath)
 pub fn co_located_stylesheets(file_path: &str) -> Vec<String> {
+    co_located_stylesheets_with(file_path, &[])
+}
+
+pub fn co_located_stylesheets_with(file_path: &str, extensions: &[ExtensionEntry]) -> Vec<String> {
     let dir = jsp::dirname(file_path);
     let name = jsp::basename(file_path);
-    let base = if let Some(suffix) = match_html_engine_extension(file_path) {
+    let suffix = match_html_engine_extension(file_path)
+        .map(str::to_string)
+        .or_else(|| {
+            match_configured_extension(file_path, extensions)
+                .filter(|c| c.engine == "html")
+                .map(|c| c.ext.clone())
+        });
+    let base = if let Some(suffix) = suffix.filter(|s| name.len() > s.len()) {
         name[..name.len() - suffix.len()].to_string()
     } else {
         jsp::basename_ext(file_path, &jsp::extname(file_path))
@@ -2266,6 +2329,15 @@ pub fn normalize_scan_targets(
 
 /// JS: expandScanTargets(primaryTargets, projectCwd)
 pub fn expand_scan_targets(rt: &Runtime, primaries: &[String], project_cwd: &str) -> Vec<String> {
+    expand_scan_targets_with(rt, primaries, project_cwd, &[])
+}
+
+pub fn expand_scan_targets_with(
+    rt: &Runtime,
+    primaries: &[String],
+    project_cwd: &str,
+    extensions: &[ExtensionEntry],
+) -> Vec<String> {
     let mut ordered = normalize_scan_targets(rt, primaries, project_cwd);
     if ordered.is_empty() {
         return vec![];
@@ -2300,7 +2372,10 @@ pub fn expand_scan_targets(rt: &Runtime, primaries: &[String], project_cwd: &str
         if STYLE_EXTS.contains(&ext.as_str()) {
             continue;
         }
-        if !matches!(ext.as_str(), ".jsx" | ".tsx") && !is_component(p) {
+        if !matches!(ext.as_str(), ".jsx" | ".tsx")
+            && !is_component(p)
+            && !is_markup_template(p, extensions)
+        {
             continue;
         }
         let content = safe_read(p).unwrap_or_default();
@@ -2310,7 +2385,7 @@ pub fn expand_scan_targets(rt: &Runtime, primaries: &[String], project_cwd: &str
                 break;
             }
         }
-        for col in co_located_stylesheets(p) {
+        for col in co_located_stylesheets_with(p, extensions) {
             add(&mut ordered, &col);
             if ordered.len() >= MAX_SCAN_TARGETS {
                 break;

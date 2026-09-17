@@ -17,7 +17,7 @@ const claudeEdit = (file, extra = {}) => ({
 const stop = (extra = {}) => ({ session_id: 's1', cwd: WS, hook_event_name: 'Stop', stop_hook_active: false, ...extra });
 
 export default [
-  ...['vue', 'blade.php'].map(suffix => {
+  ...['vue', 'blade.php', 'html.erb'].map(suffix => {
     const file = `src/Card.${suffix}`;
     const before = '<div>Before</div>\n<style>\n.card { border-left: 4px solid #6366f1; }\n</style>\n';
     return {
@@ -25,6 +25,12 @@ export default [
       workspace: 'hook-project', files: CACHE_FILES,
       normalize: [['("stopBaseline":\\{"version":1,"engine":")[^"]+', 'g', '$1<ENGINE_VERSION>']],
       setup(ws) {
+        if (suffix === 'html.erb') {
+          fs.mkdirSync(`${ws}/.impeccable`, { recursive: true });
+          fs.writeFileSync(`${ws}/.impeccable/config.json`, JSON.stringify({
+            detector: { extensions: [{ ext: '.html.erb', engine: 'html' }] },
+          }));
+        }
         fs.writeFileSync(`${ws}/${file}`, before.replace('Before', 'After'));
       },
       steps: [
